@@ -378,6 +378,18 @@ public class ConcurrentPool<P> implements Pool<P>, Dumpable
     }
 
     @Override
+    public boolean hasIdle()
+    {
+        for (Holder<P> holder : entries)
+        {
+            Entry<P> entry = holder.getEntry();
+            if (entry != null && entry.isIdle())
+                return true;
+        }
+        return false;
+    }
+
+    @Override
     public int getInUseCount()
     {
         return getCount(Entry::isInUse);

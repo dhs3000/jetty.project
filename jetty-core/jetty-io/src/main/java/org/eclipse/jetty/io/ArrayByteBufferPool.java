@@ -304,6 +304,13 @@ public class ArrayByteBufferPool implements ByteBufferPool, Dumpable
 
     private boolean evict(long excessMemory, RetainedBucket target, boolean direct)
     {
+        // return evictBiasedRandom(excessMemory, target, direct);
+        // return evictUnbiasedRandom(excessMemory, target, direct);
+        return evictLargest(excessMemory, target, direct);
+    }
+
+    private boolean evictBiasedRandom(long excessMemory, RetainedBucket target, boolean direct)
+    {
         RetainedBucket[] buckets = direct ? _direct : _indirect;
         int length = buckets.length;
         int index = ThreadLocalRandom.current().nextInt(length);
@@ -318,11 +325,82 @@ public class ArrayByteBufferPool implements ByteBufferPool, Dumpable
 
             int evicted = bucket.evict();
             updateMemory(-evicted, direct);
-
             excessMemory -= evicted;
             if (excessMemory <= 0)
                 return true;
         }
+        return false;
+    }
+
+    private boolean evictUnbiasedRandom(long excessMemory, RetainedBucket target, boolean direct)
+    {
+        RetainedBucket[] buckets = direct ? _direct : _indirect;
+        int length = buckets.length;
+
+        int count = 0;
+        int index = 0;
+        for (int c = 0; c < length; ++c)
+        {
+            RetainedBucket bucket = buckets[c];
+            if (bucket != target && bucket.getPool().hasIdle())
+            {
+                if (count == 0)
+                    index = c;
+                count++;
+            }
+        }
+
+        int random = ThreadLocalRandom.current().nextInt(count);
+        for (int c = 0; c < length; ++c)
+        {
+            RetainedBucket bucket = buckets[index++];
+            if (index == length)
+                index = 0;
+
+            if (bucket == target || !bucket.getPool().hasIdle())
+                continue;
+
+            if (random-- > 0)
+                continue;
+
+            int evicted = bucket.evict();
+            updateMemory(-evicted, direct);
+            excessMemory -= evicted;
+            if (excessMemory <= 0)
+                return true;
+        }
+        return false;
+    }
+
+    private boolean evictLargest(long excessMemory, RetainedBucket target, boolean direct)
+    {
+        RetainedBucket[] buckets = direct ? _direct : _indirect;
+        int length = buckets.length;
+
+        // Find the largest idle bucket
+        long maxSize = -1L;
+        RetainedBucket largest = null;
+        for (RetainedBucket bucket : buckets)
+        {
+            if (bucket == target)
+                continue;
+            long size = (long)bucket.getCapacity() * bucket.getPool().getIdleCount();
+            if (size >= maxSize)
+            {
+                maxSize = size;
+                largest = bucket;
+            }
+        }
+        if (largest != null)
+        {
+            // Evict from the largest
+            int evicted = largest.evict();
+            updateMemory(-evicted, direct);
+            excessMemory -= evicted;
+            if (excessMemory <= 0)
+                return true;
+        }
+
         return false;
     }
 

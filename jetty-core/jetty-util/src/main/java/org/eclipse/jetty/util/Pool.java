@@ -143,6 +143,14 @@ public interface Pool<P>
     }
 
     /**
+     * @return true if there are idle entries.
+     */
+    default boolean hasIdle()
+    {
+        return getIdleCount() > 0;
+    }
+
+    /**
      * @return the number of in-use entries
      */
     @ManagedAttribute("The number of in-use entries")
@@ -237,6 +245,12 @@ public interface Pool<P>
         public int getIdleCount()
         {
             return getWrapped().getIdleCount();
+        }
+
+        @Override
+        public boolean hasIdle()
+        {
+            return getWrapped().hasIdle();
         }
 
         @Override

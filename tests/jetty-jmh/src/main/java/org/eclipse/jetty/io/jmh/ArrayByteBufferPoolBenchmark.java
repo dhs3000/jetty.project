@@ -64,14 +64,20 @@ public class ArrayByteBufferPoolBenchmark
     long maxMemory;
     @Param({"true"})
     boolean statisticsEnabled;
+    @Param({"2", "8"})
+    int writeDiversity;
 
     ArrayByteBufferPool pool;
+    int[] writeSizes;
 
     @Setup
     public void prepare()
     {
         pool = new ArrayByteBufferPool(minCapacity, factor, maxCapacity, maxBucketSize, maxMemory, maxMemory);
         pool.setStatisticsEnabled(statisticsEnabled);
+        writeSizes = new int[writeDiversity];
+        for (int i = 0; i < writeDiversity; i++)
+            writeSizes[i] = ThreadLocalRandom.current().nextInt(minCapacity, maxCapacity);
     }
 
     @TearDown
@@ -88,7 +94,7 @@ public class ArrayByteBufferPoolBenchmark
         RetainableByteBuffer input = pool.acquire(61440, true);
 
         // Simulate a write of random size from the application.
-        int capacity = ThreadLocalRandom.current().nextInt(minCapacity, maxCapacity);
+        int capacity = writeSizes[ThreadLocalRandom.current().nextInt(writeDiversity)];
         RetainableByteBuffer output = pool.acquire(capacity, true);
 
         output.release();
@@ -116,9 +122,9 @@ public class ArrayByteBufferPoolBenchmark
         // Simulate a change in buffer sizes after half of the iterations.
         int capacity;
         if (iterations <= 15)
-            capacity = ThreadLocalRandom.current().nextInt(minCapacity, maxCapacity / 2);
+            capacity = writeSizes[ThreadLocalRandom.current().nextInt(writeDiversity / 2)];
         else
-            capacity = ThreadLocalRandom.current().nextInt(maxCapacity / 2, maxCapacity);
+            capacity = writeSizes[ThreadLocalRandom.current().nextInt(writeDiversity / 2) + (writeDiversity / 2)];
         RetainableByteBuffer output = pool.acquire(capacity, true);
 
         output.release();

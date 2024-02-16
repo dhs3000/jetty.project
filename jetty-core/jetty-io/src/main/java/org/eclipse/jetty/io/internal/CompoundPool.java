@@ -105,6 +105,12 @@ public class CompoundPool<P> implements Pool<P>
     }
 
     @Override
+    public boolean hasIdle()
+    {
+        return secondaryPool.hasIdle() || primaryPool.hasIdle();
+    }
+
+    @Override
     public int getInUseCount()
     {
         return primaryPool.getInUseCount() + secondaryPool.getInUseCount();

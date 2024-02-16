@@ -193,6 +193,12 @@ public class QueuedPool<P> implements Pool<P>
     }
 
     @Override
+    public boolean hasIdle()
+    {
+        return !queue.isEmpty();
+    }
+
+    @Override
     public int getInUseCount()
     {
         return 0;
