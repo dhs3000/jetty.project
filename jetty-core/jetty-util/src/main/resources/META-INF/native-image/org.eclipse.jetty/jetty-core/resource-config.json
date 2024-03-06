@@ -1,9 +1,0 @@
-{
-  "resources":{
-  "includes":[
-    {
-      "pattern":"\\Qorg/eclipse/jetty/version/build.properties\\E"
-    }
-  ]},
-  "bundles":[]
-}
