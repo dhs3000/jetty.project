@@ -12,6 +12,7 @@
   <packaging>pom</packaging>
   <name>EE10</name>
 
+
   <modules>
     <module>jetty-ee10-annotations</module>
     <module>jetty-ee10-apache-jsp</module>
