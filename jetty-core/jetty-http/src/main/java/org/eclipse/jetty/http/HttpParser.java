@@ -178,25 +178,11 @@ public class HttpParser
         .maxCapacity(0)
         .build();
 
-    private static final long HTTP_1_0_AS_LONG = stringAsLong("HTTP/1.0");
-    private static final long HTTP_1_1_AS_LONG = stringAsLong("HTTP/1.1");
-    private static final long GET_SLASH_HT_AS_LONG = stringAsLong("GET / HT");
-    private static final long TP_SLASH_1_0_CRLF_AS_LONG = stringAsLong("TP/1.0\r\n");
-    private static final long TP_SLASH_1_1_CRLF_AS_LONG = stringAsLong("TP/1.1\r\n");
-    private static final long SPACE_200_OK_CR_AS_LONG = stringAsLong(" 200 OK\r");
-    private static final int CRLF_AS_SHORT = ((0xFF & '\r') << Byte.SIZE) | (0xFF & '\n');
-
-    private static long stringAsLong(String s)
-    {
-        if (s == null || s.length() != Long.BYTES)
-            throw new IllegalArgumentException();
-        long l = 0;
-        for (char c : s.toCharArray())
-        {
-            l = l << Byte.SIZE | ((long)c & 0xFFL);
-        }
-        return l;
-    }
+    private static final int HTTP_AS_INT = ('H' & 0xFF) << 24 | ('T' & 0xFF) << 16 | ('T' & 0xFF) << 8 | ('P' & 0xFF);
+    private static final int HTTP_1_0_AS_INT = ('/' & 0xFF) << 24 | ('1' & 0xFF) << 16 | ('.' & 0xFF) << 8 | ('0' & 0xFF);
+    private static final int HTTP_1_1_AS_INT = ('/' & 0xFF) << 24 | ('1' & 0xFF) << 16 | ('.' & 0xFF) << 8 | ('1' & 0xFF);
+    private static final int HTTP_VERSION_LEN = 8;
+    private static final int INT_LEN = 4;
 
     // States
     public enum FieldState
@@ -243,7 +229,6 @@ public class HttpParser
     private final HttpHandler _handler;
     private final RequestHandler _requestHandler;
     private final ResponseHandler _responseHandler;
-    private final boolean _requestParser;
     private final int _maxHeaderBytes;
     private final HttpCompliance _complianceMode;
     private final Utf8StringBuilder _uri = new Utf8StringBuilder(INITIAL_URI_LENGTH);
@@ -318,12 +303,9 @@ public class HttpParser
 
     private HttpParser(RequestHandler requestHandler, ResponseHandler responseHandler, int maxHeaderBytes, HttpCompliance compliance)
     {
+        _handler = requestHandler != null ? requestHandler : responseHandler;
         _requestHandler = requestHandler;
         _responseHandler = responseHandler;
-        _requestParser = _requestHandler != null;
-        if (!_requestParser && _responseHandler == null)
-            throw new IllegalStateException();
-        _handler = _requestParser ? requestHandler : responseHandler;
         _maxHeaderBytes = maxHeaderBytes;
         _complianceMode = compliance;
     }
@@ -373,7 +355,7 @@ public class HttpParser
 
     protected void reportComplianceViolation(Violation violation, String reason)
     {
-        if (_requestParser)
+        if (_requestHandler != null)
             _requestHandler.onViolation(new ComplianceViolation.Event(_complianceMode, violation, reason));
     }
 
@@ -525,121 +507,36 @@ public class HttpParser
         return t;
     }
 
-    private boolean quickStartRequestLine(ByteBuffer buffer)
-    {
-        int position = buffer.position();
-        int remaining = buffer.remaining();
-
-        if (remaining >= 2 * Long.BYTES)
-        {
-            // try to match "GET / HTTP/1.x\r\n" with two longs
-            long lookahead = buffer.getLong(position);
-            if (lookahead == GET_SLASH_HT_AS_LONG)
-            {
-                long v = buffer.getLong(position + Long.BYTES);
-                if (v == TP_SLASH_1_1_CRLF_AS_LONG)
-                {
-                    buffer.position(position + 2 * Long.BYTES);
-                    _methodString = HttpMethod.GET.asString();
-                    _version = HttpVersion.HTTP_1_1;
-                    setState(State.HEADER);
-                    _requestHandler.startRequest(_methodString, "/", _version);
-                    return true;
-                }
-                if (v == TP_SLASH_1_0_CRLF_AS_LONG)
-                {
-                    buffer.position(position + 2 * Long.BYTES);
-                    _methodString = HttpMethod.GET.asString();
-                    _version = HttpVersion.HTTP_1_0;
-                    setState(State.HEADER);
-                    _requestHandler.startRequest(_methodString, "/", _version);
-                    return true;
-                }
-            }
-            else
-            {
-                // else lookup just the method using the first 4 bytes of the already fetched long as a lookahead.
-                _method = HttpMethod.lookAheadGet(buffer, (int)((lookahead >> 32)));
-            }
-        }
-        else if (remaining >= Integer.BYTES)
-        {
-            // otherwise try a lookahead to match just the method
-            _method = HttpMethod.lookAheadGet(buffer);
-        }
-
-        if (_method != null)
-        {
-            _methodString = _method.asString();
-            // The lookAheadGet method above checks for the trailing space,
-            // so it is safe to move the position 1 more than the method length.
-            position = position + _methodString.length() + 1;
-            buffer.position(position);
-            setState(State.SPACE1);
-            return true;
-        }
-        return false;
-    }
-
-    private boolean quickStartResponseLine(ByteBuffer buffer)
-    {
-        int position = buffer.position();
-        int remaining = buffer.remaining();
-
-        if (remaining > Long.BYTES)
-        {
-            // Match version as a long
-            long v = buffer.getLong(position);
-            if (v == HTTP_1_1_AS_LONG)
-                _version = HttpVersion.HTTP_1_1;
-            else if (v == HTTP_1_0_AS_LONG)
-                _version = HttpVersion.HTTP_1_0;
-
-            if (_version != null)
-            {
-                position += Long.BYTES;
-
-                // Try to make 200 OK as a long
-                if (remaining > 2 * Long.BYTES &&
-                    buffer.get(position + Long.BYTES) == '\n' &&
-                    buffer.getLong(position) == SPACE_200_OK_CR_AS_LONG)
-                {
-                    buffer.position(position + 9);
-                    _responseStatus = HttpStatus.OK_200;
-                    _fieldCache.prepare();
-                    setState(State.HEADER);
-                    _responseHandler.startResponse(_version, _responseStatus, "OK");
-                    return true;
-                }
-
-                if (buffer.get(position) == ' ')
-                {
-                    buffer.position(position + 1);
-                    setState(State.SPACE1);
-                    return true;
-                }
-
-                // Probably a bad version like HTTP/1.11
-                _version = null;
-            }
-        }
-        return false;
-    }
-
     /* Quick lookahead for the start state looking for a request method or an HTTP version,
      * otherwise skip white space until something else to parse.
      */
     private void quickStart(ByteBuffer buffer)
     {
-        if (_requestParser)
+        int position = buffer.position();
+        if (_requestHandler != null)
         {
-            if (quickStartRequestLine(buffer))
+            _method = HttpMethod.lookAheadGet(buffer);
+            if (_method != null)
+            {
+                _methodString = _method.asString();
+                // The lookAheadGet method above checks for the trailing space,
+                // so it is safe to move the position 1 more than the method length.
+                buffer.position(position + _methodString.length() + 1);
+
+                setState(State.SPACE1);
                 return;
+            }
         }
-        else
+        else if (_responseHandler != null && buffer.remaining() >= (HTTP_VERSION_LEN + 1) && buffer.getInt(position) == HTTP_AS_INT)
         {
-            if (quickStartResponseLine(buffer))
+            int v = buffer.getInt(position + INT_LEN);
+            _version = v == HTTP_1_1_AS_INT ? HttpVersion.HTTP_1_1 : v == HTTP_1_0_AS_INT ? HttpVersion.HTTP_1_0 : null;
+            if (_version != null && buffer.get(position + HTTP_VERSION_LEN) == ' ')
+            {
+                buffer.position(position + HTTP_VERSION_LEN + 1);
+                setState(State.SPACE1);
                 return;
+            }
         }
 
         // Quick start look
@@ -651,17 +548,23 @@ public class HttpParser
 
             switch (t.getType())
             {
-                case ALPHA, DIGIT, TCHAR, VCHAR ->
+                case ALPHA:
+                case DIGIT:
+                case TCHAR:
+                case VCHAR:
                 {
                     _string.setLength(0);
                     _string.append(t.getChar());
-                    setState(_requestParser ? State.METHOD : State.RESPONSE_VERSION);
+                    setState(_requestHandler != null ? State.METHOD : State.RESPONSE_VERSION);
                     return;
                 }
-                case OTEXT, SPACE, HTAB -> throw new IllegalCharacterException(_state, t, buffer);
-                default ->
-                {
-                }
+                case OTEXT:
+                case SPACE:
+                case HTAB:
+                    throw new IllegalCharacterException(_state, t, buffer);
+
+                default:
+                    break;
             }
 
             // count this white space as a header byte to avoid DOS
@@ -731,7 +634,7 @@ public class HttpParser
                 }
                 else
                 {
-                    if (_requestParser)
+                    if (_requestHandler != null)
                         LOG.warn("request is too large >{}", _maxHeaderBytes);
                     else
                         LOG.warn("response is too large >{}", _maxHeaderBytes);
@@ -817,7 +720,7 @@ public class HttpParser
                         case TCHAR:
                         case VCHAR:
                         case COLON:
-                            if (!_requestParser)
+                            if (_responseHandler != null)
                             {
                                 if (t.getType() != HttpTokens.Type.DIGIT)
                                     throw new IllegalCharacterException(_state, t, buffer);
@@ -857,12 +760,12 @@ public class HttpParser
                             break;
 
                         default:
-                            throw new BadMessageException(_requestParser ? "No URI" : "No Status");
+                            throw new BadMessageException(_requestHandler != null ? "No URI" : "No Status");
                     }
                     break;
 
                 case STATUS:
-                    assert !_requestParser;
+                    assert _responseHandler != null;
                     switch (t.getType())
                     {
                         case SPACE:
@@ -887,32 +790,36 @@ public class HttpParser
                     break;
 
                 case URI:
-                    assert _requestParser;
+                    assert _requestHandler != null;
                     int position = buffer.position();
                     int remaining = buffer.remaining();
                     switch (t.getType())
                     {
                         case SPACE:
-                            int endOfVersion = position + Long.BYTES;
-                            if (remaining >= (Long.BYTES + 2) &&
-                                buffer.getShort(endOfVersion) == CRLF_AS_SHORT)
+                            if (remaining >= (HTTP_VERSION_LEN + 1) && buffer.getInt(position) == HTTP_AS_INT)
                             {
-                                // try look-ahead for request HTTP Version
-                                long versionAsLong = buffer.getLong(position);
-                                HttpVersion version = versionAsLong == HTTP_1_1_AS_LONG
-                                    ? HttpVersion.HTTP_1_1
-                                    : versionAsLong == HTTP_1_0_AS_LONG ? HttpVersion.HTTP_1_0 : null;
+                                // try look ahead for request HTTP Version
+                                int v = buffer.getInt(position + INT_LEN);
+                                HttpVersion version = v == HTTP_1_1_AS_INT ? HttpVersion.HTTP_1_1 : v == HTTP_1_0_AS_INT ? HttpVersion.HTTP_1_0 : null;
 
                                 if (version != null)
                                 {
-                                    buffer.position(endOfVersion + 2);
-                                    _version = version;
-                                    _string.setLength(0);
-                                    checkVersion();
-                                    _fieldCache.prepare();
-                                    setState(State.HEADER);
-                                    _requestHandler.startRequest(_methodString, _uri.toCompleteString(), _version);
-                                    continue;
+                                    int p = position + HTTP_VERSION_LEN;
+                                    byte next = buffer.get(p++);
+                                    if (next == CARRIAGE_RETURN && remaining >= (HTTP_VERSION_LEN + 2))
+                                        next = buffer.get(p++);
+
+                                    if (next == LINE_FEED)
+                                    {
+                                        buffer.position(p);
+                                        _version = version;
+                                        _string.setLength(0);
+                                        checkVersion();
+                                        _fieldCache.prepare();
+                                        setState(State.HEADER);
+                                        _requestHandler.startRequest(_methodString, _uri.toCompleteString(), _version);
+                                        continue;
+                                    }
                                 }
                             }
                             setState(State.SPACE2);
@@ -963,11 +870,11 @@ public class HttpParser
                             _string.setLength(0);
                             _string.append(t.getChar());
                             _length = 1;
-                            setState(_requestParser ? State.REQUEST_VERSION : State.REASON);
+                            setState(_responseHandler != null ? State.REASON : State.REQUEST_VERSION);
                             break;
 
                         case LF:
-                            if (!_requestParser)
+                            if (_responseHandler != null)
                             {
                                 _fieldCache.prepare();
                                 setState(State.HEADER);
@@ -1020,7 +927,7 @@ public class HttpParser
                     break;
 
                 case REASON:
-                    assert !_requestParser;
+                    assert _responseHandler != null;
                     switch (t.getType())
                     {
                         case LF:
@@ -1314,13 +1221,13 @@ public class HttpParser
                             }
 
                             // Was there a required host header?
-                            if (_parsedHost == null && _version == HttpVersion.HTTP_1_1 && _requestParser)
+                            if (_parsedHost == null && _version == HttpVersion.HTTP_1_1 && _requestHandler != null)
                             {
                                 throw new BadMessageException("No Host");
                             }
 
                             // is it a response that cannot have a body?
-                            if (!_requestParser && // response
+                            if (_responseHandler != null && // response
                                 (_responseStatus == 304 || // not-modified response
                                     _responseStatus == 204 || // no-content response
                                     _responseStatus < 200)) // 1xx response
@@ -1611,7 +1518,10 @@ public class HttpParser
             // Start a request/response
             if (_state == State.START)
             {
-                _handler.messageBegin();
+                if (_requestHandler != null)
+                    _requestHandler.messageBegin();
+                if (_responseHandler != null)
+                    _responseHandler.messageBegin();
                 _version = null;
                 _method = null;
                 _methodString = null;
@@ -1741,7 +1651,7 @@ public class HttpParser
             BufferUtil.clear(buffer);
             HttpException bad = x instanceof HttpException http
                 ? http
-                : new BadMessageException(_requestParser ? "Bad Request" : "Bad Response", x);
+                : new BadMessageException(_requestHandler != null ? "Bad Request" : "Bad Response", x);
             badMessage(bad);
         }
         return false;
