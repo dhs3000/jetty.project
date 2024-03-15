@@ -14,9 +14,9 @@
 package org.eclipse.jetty.util.thread;
 
 import java.io.IOException;
-import java.util.concurrent.Exchanger;
 import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -256,7 +256,8 @@ public class ReservedThreadExecutor extends ContainerLifeCycle implements TryExe
 
     private class ReservedThread implements Runnable
     {
-        private final Exchanger<Runnable> _exchanger = new Exchanger<>();
+        private final Semaphore _semaphore = new Semaphore(0);
+        private volatile Runnable _task;
         private volatile Thread _thread;
 
         @Override
@@ -329,20 +330,9 @@ public class ReservedThreadExecutor extends ContainerLifeCycle implements TryExe
 
         private boolean wakeup(Runnable task)
         {
-            try
-            {
-                if (_idleTimeoutMs <= 0)
-                    _exchanger.exchange(task);
-                else
-                    _exchanger.exchange(task, _idleTimeoutMs, TimeUnit.MILLISECONDS);
-                return true;
-            }
-            catch (Throwable e)
-            {
-                if (LOG.isDebugEnabled())
-                   LOG.debug("exchange failed", e);
-            }
-            return false;
+            _task = task;
+            _semaphore.release(1);
+            return true;
         }
 
         private Runnable waitForTask()
@@ -350,8 +340,12 @@ public class ReservedThreadExecutor extends ContainerLifeCycle implements TryExe
             try
             {
                 if (_idleTimeoutMs <= 0)
-                    return _exchanger.exchange(null);
-                return _exchanger.exchange(null, _idleTimeoutMs, TimeUnit.MILLISECONDS);
+                    _semaphore.acquire(1);
+                else if (!_semaphore.tryAcquire(1, _idleTimeoutMs, TimeUnit.MILLISECONDS))
+                    return null;
+                Runnable task = _task;
+                _task = null;
+                return task;
             }
             catch (Throwable e)
             {
@@ -365,6 +359,7 @@ public class ReservedThreadExecutor extends ContainerLifeCycle implements TryExe
         {
             // If we are stopping, the reserved thread may already have stopped.  So just interrupt rather than
             // expect an exchange rendezvous.
+            _semaphore.release(1);
             Thread thread = _thread;
             if (thread != null)
                 thread.interrupt();
